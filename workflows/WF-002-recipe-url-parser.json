@@ -1,0 +1,533 @@
+{
+  "name": "Plateful — Recipe URL Parser",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "recipe-url",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook: Receive URL",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "recipe-url"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-url",
+              "leftValue": "={{ $json.body.url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "cond-household",
+              "leftValue": "={{ $json.body.household_id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "validate-input",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'Missing required fields: url and household_id', error_code: 'INVALID_INPUT' }) }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "error-invalid-input",
+      "name": "Error: Invalid Input",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [640, 480]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Webhook: Receive URL').first().json.body.url }}",
+        "options": {
+          "timeout": 15000,
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 5
+            }
+          }
+        }
+      },
+      "id": "fetch-url",
+      "name": "HTTP: Fetch Recipe Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: 'Could not access this URL. The site may require login, block automated access, or the URL may be invalid. Try copying the recipe text and using paste import instead.', error_code: 'URL_FETCH_FAILED' }) }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "error-url-failed",
+      "name": "Error: URL Fetch Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [860, 480]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Clean HTML: strip non-content elements, extract text\nconst html = $input.first().json.data || $input.first().json.body || String($input.first().json);\n\nif (!html || typeof html !== 'string' || html.length < 100) {\n  return [{\n    json: {\n      cleaned: false,\n      error: 'Page content is too short or empty. The site may require JavaScript to load, or blocks automated access.'\n    }\n  }];\n}\n\n// Remove script, style, nav, footer, header, aside tags and their content\nlet cleaned = html\n  .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<nav[^>]*>[\\s\\S]*?<\\/nav>/gi, '')\n  .replace(/<footer[^>]*>[\\s\\S]*?<\\/footer>/gi, '')\n  .replace(/<header[^>]*>[\\s\\S]*?<\\/header>/gi, '')\n  .replace(/<aside[^>]*>[\\s\\S]*?<\\/aside>/gi, '')\n  .replace(/<form[^>]*>[\\s\\S]*?<\\/form>/gi, '')\n  .replace(/<!--[\\s\\S]*?-->/g, '');\n\n// Convert common HTML elements to text-friendly format\ncleaned = cleaned\n  .replace(/<br\\s*\\/?>/gi, '\\n')\n  .replace(/<\\/p>/gi, '\\n\\n')\n  .replace(/<\\/div>/gi, '\\n')\n  .replace(/<\\/li>/gi, '\\n')\n  .replace(/<\\/h[1-6]>/gi, '\\n\\n')\n  .replace(/<[^>]+>/g, ' ')  // Remove remaining HTML tags\n  .replace(/&nbsp;/g, ' ')\n  .replace(/&amp;/g, '&')\n  .replace(/&lt;/g, '<')\n  .replace(/&gt;/g, '>')\n  .replace(/&quot;/g, '\"')\n  .replace(/&#39;/g, \"'\")\n  .replace(/\\n{3,}/g, '\\n\\n')  // Collapse multiple newlines\n  .replace(/[ \\t]{2,}/g, ' ')  // Collapse multiple spaces\n  .trim();\n\n// Truncate to 10,000 chars to stay within Claude context limits\nif (cleaned.length > 10000) {\n  cleaned = cleaned.substring(0, 10000) + '\\n[... truncated]';\n}\n\nconst webhookData = $('Webhook: Receive URL').first().json;\n\nreturn [{\n  json: {\n    cleaned: true,\n    text: cleaned,\n    url: webhookData.body.url,\n    household_id: webhookData.body.household_id\n  }\n}];"
+      },
+      "id": "clean-html",
+      "name": "Clean HTML → Extract Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-cleaned",
+              "leftValue": "={{ $json.cleaned }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-cleaned",
+      "name": "Is Content Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: $json.error || 'Could not extract recipe content from this page. Try copying the recipe text and using paste import instead.', error_code: 'URL_FETCH_FAILED' }) }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "error-clean-failed",
+      "name": "Error: Content Extraction Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1300, 480]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PLATEFUL_SUPABASE_URL }}/rest/v1/ingredients",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "name,aliases"
+            },
+            {
+              "name": "household_id",
+              "value": "=eq.{{ $json.household_id }}"
+            },
+            {
+              "name": "is_archived",
+              "value": "=eq.false"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.PLATEFUL_SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.PLATEFUL_SUPABASE_SERVICE_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "fetch-ingredients",
+      "name": "Supabase: Fetch Household Ingredients",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build ingredient reference list AND pre-build the Claude API request body\nconst ingredients = $input.all().map(item => item.json);\n\nlet referenceList = '';\nfor (const ing of ingredients) {\n  let line = ing.name;\n  if (ing.aliases && ing.aliases.length > 0) {\n    line += ` (${ing.aliases.join(', ')})`;\n  }\n  referenceList += line + '\\n';\n}\n\nconst cleanedData = $('Clean HTML → Extract Text').first().json;\nconst recipeText = cleanedData.text;\n\nconst systemPrompt = 'You are a recipe parsing assistant for Plateful, a meal planning app. Parse the given recipe text into structured JSON. The text was extracted from a web page and may contain navigation text, ads, or other non-recipe content — ignore those and focus on the recipe. Return ONLY valid JSON, no markdown, no explanation, no code fences. Follow the exact schema specified. Always return quantities as numbers and units as strings — never some, to taste, or as needed. Match ingredient names against the provided known ingredients list when possible.';\n\nconst userMessage = 'Parse this recipe into structured JSON.\\n\\n## Known Ingredients (match against these):\\n' + referenceList + '\\n## Recipe Text (extracted from web page — ignore ads/navigation):\\n' + recipeText + '\\n\\n## Required JSON Schema:\\n{\\n  \"success\": true,\\n  \"recipe\": { \"title\": \"string\", \"description\": \"string|null\", \"cuisine\": \"string|null\", \"meal_types\": [\"array\"], \"servings\": \"int\", \"prep_time_min\": \"int|null\", \"cook_time_min\": \"int|null\", \"difficulty\": \"easy|medium|hard\", \"tags\": [\"array\"], \"is_vegetarian\": \"bool\", \"is_vegan\": \"bool\", \"is_batch_friendly\": \"bool\", \"leftover_days\": \"int 0-5\" },\\n  \"ingredients\": [{ \"name\": \"string\", \"matched_name\": \"string|null\", \"quantity\": \"number\", \"unit\": \"string\", \"preparation\": \"string|null\", \"is_optional\": \"bool\", \"group_name\": \"string|null\", \"sort_order\": \"int\" }],\\n  \"steps\": [{ \"step_number\": \"int\", \"instruction\": \"string\", \"duration_min\": \"int|null\" }]\\n}\\n\\nIf you cannot identify a recipe, return: { \"success\": false, \"error\": \"explanation\" }';\n\nconst claudeBody = {\n  model: 'claude-sonnet-4-20250514',\n  max_tokens: 4096,\n  temperature: 0,\n  system: systemPrompt,\n  messages: [{ role: 'user', content: userMessage }]\n};\n\nreturn [{\n  json: {\n    recipe_text: recipeText,\n    household_id: cleanedData.household_id,\n    source_url: cleanedData.url,\n    ingredient_reference: referenceList,\n    ingredient_count: ingredients.length,\n    claude_body: JSON.stringify(claudeBody)\n  }\n}];"
+      },
+      "id": "build-reference",
+      "name": "Build Ingredient Reference List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.claude_body }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "claude-parse",
+      "name": "Claude API: Parse Recipe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1740, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and validate Claude's response\nconst claudeResponse = $input.first().json;\nconst buildData = $('Build Ingredient Reference List').first().json;\n\ntry {\n  const content = claudeResponse.content[0].text;\n  \n  let cleanJson = content.trim();\n  if (cleanJson.startsWith('```')) {\n    cleanJson = cleanJson.replace(/^```json?\\n?/, '').replace(/\\n?```$/, '');\n  }\n  \n  const parsed = JSON.parse(cleanJson);\n  \n  if (parsed.success === false) {\n    return [{\n      json: {\n        valid: false,\n        error: parsed.error || 'Could not parse recipe from the page content.',\n        error_code: 'PARSE_FAILED'\n      }\n    }];\n  }\n  \n  if (!parsed.recipe || !parsed.recipe.title) {\n    return [{\n      json: {\n        valid: false,\n        error: 'Parsed recipe is missing a title.',\n        error_code: 'PARSE_FAILED'\n      }\n    }];\n  }\n  \n  if (!parsed.ingredients || parsed.ingredients.length === 0) {\n    return [{\n      json: {\n        valid: false,\n        error: 'Parsed recipe has no ingredients.',\n        error_code: 'PARSE_FAILED'\n      }\n    }];\n  }\n  \n  if (!parsed.steps || parsed.steps.length === 0) {\n    return [{\n      json: {\n        valid: false,\n        error: 'Parsed recipe has no cooking steps.',\n        error_code: 'PARSE_FAILED'\n      }\n    }];\n  }\n  \n  parsed.recipe.servings = Math.max(1, parsed.recipe.servings || 2);\n  \n  if (!['easy', 'medium', 'hard'].includes(parsed.recipe.difficulty)) {\n    parsed.recipe.difficulty = 'medium';\n  }\n  \n  return [{\n    json: {\n      valid: true,\n      parsed: parsed,\n      household_id: buildData.household_id,\n      source_url: buildData.source_url,\n      source_text: buildData.recipe_text,\n      source_type: 'url_import'\n    }\n  }];\n  \n} catch (e) {\n  return [{\n    json: {\n      valid: false,\n      error: 'Failed to parse AI response: ' + e.message,\n      error_code: 'PARSE_FAILED'\n    }\n  }];\n}"
+      },
+      "id": "validate-response",
+      "name": "Validate Claude Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1960, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-valid",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-valid",
+      "name": "Is Parse Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2180, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: false, error: $json.error, error_code: $json.error_code }) }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "error-parse-failed",
+      "name": "Error: Parse Failed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2400, 480]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.PLATEFUL_SUPABASE_URL }}/rest/v1/recipes",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.PLATEFUL_SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.PLATEFUL_SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"household_id\": \"{{ $json.household_id }}\",\n  \"title\": {{ JSON.stringify($json.parsed.recipe.title) }},\n  \"description\": {{ JSON.stringify($json.parsed.recipe.description || null) }},\n  \"cuisine\": {{ JSON.stringify($json.parsed.recipe.cuisine || null) }},\n  \"meal_types\": {{ JSON.stringify($json.parsed.recipe.meal_types || []) }},\n  \"servings\": {{ $json.parsed.recipe.servings || 2 }},\n  \"prep_time_min\": {{ $json.parsed.recipe.prep_time_min || 'null' }},\n  \"cook_time_min\": {{ $json.parsed.recipe.cook_time_min || 'null' }},\n  \"difficulty\": {{ JSON.stringify($json.parsed.recipe.difficulty || 'medium') }},\n  \"tags\": {{ JSON.stringify($json.parsed.recipe.tags || []) }},\n  \"source_type\": \"{{ $json.source_type }}\",\n  \"source_url\": {{ JSON.stringify($json.source_url) }},\n  \"source_text\": {{ JSON.stringify($json.source_text) }},\n  \"status\": \"draft\",\n  \"is_vegetarian\": {{ $json.parsed.recipe.is_vegetarian || false }},\n  \"is_vegan\": {{ $json.parsed.recipe.is_vegan || false }},\n  \"is_batch_friendly\": {{ $json.parsed.recipe.is_batch_friendly || false }},\n  \"leftover_days\": {{ $json.parsed.recipe.leftover_days || 0 }}\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "save-recipe",
+      "name": "Supabase: Save Recipe (Draft)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2400, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Match ingredients and save to Supabase using axios\nconst axios = require('axios');\n\nconst recipe = $('Supabase: Save Recipe (Draft)').first().json;\nconst recipeId = Array.isArray(recipe) ? recipe[0].id : recipe.id;\nconst parsedData = $('Validate Claude Response').first().json;\nconst householdId = parsedData.household_id;\nconst ingredients = parsedData.parsed.ingredients;\n\nconst supabaseUrl = $env.PLATEFUL_SUPABASE_URL;\nconst serviceKey = $env.PLATEFUL_SUPABASE_SERVICE_KEY;\n\nconst headers = {\n  'apikey': serviceKey,\n  'Authorization': `Bearer ${serviceKey}`,\n  'Content-Type': 'application/json',\n  'Prefer': 'return=representation'\n};\n\n// Fetch current household ingredients\nconst ingResponse = await axios.get(\n  `${supabaseUrl}/rest/v1/ingredients?household_id=eq.${householdId}&is_archived=eq.false&select=id,name`,\n  { headers }\n);\nconst existingIngredients = ingResponse.data;\n\nconst ingLookup = {};\nfor (const ei of existingIngredients) {\n  ingLookup[ei.name.toLowerCase()] = ei.id;\n}\n\nconst recipeIngredients = [];\nconst unmatchedIngredients = [];\n\nfor (const ing of ingredients) {\n  let ingredientId = null;\n  const matchKey = (ing.matched_name || '').toLowerCase();\n  const nameKey = ing.name.toLowerCase();\n\n  if (matchKey && ingLookup[matchKey]) {\n    ingredientId = ingLookup[matchKey];\n  } else if (ingLookup[nameKey]) {\n    ingredientId = ingLookup[nameKey];\n  }\n\n  if (!ingredientId) {\n    const createResp = await axios.post(\n      `${supabaseUrl}/rest/v1/ingredients`,\n      { household_id: householdId, name: ing.name.toLowerCase(), category: 'other', default_unit: ing.unit || 'g' },\n      { headers }\n    );\n    const created = createResp.data;\n    ingredientId = Array.isArray(created) ? created[0].id : created.id;\n    ingLookup[ing.name.toLowerCase()] = ingredientId;\n    unmatchedIngredients.push(ing.name);\n  }\n\n  recipeIngredients.push({\n    recipe_id: recipeId,\n    ingredient_id: ingredientId,\n    quantity: ing.quantity,\n    unit: ing.unit,\n    preparation: ing.preparation || null,\n    is_optional: ing.is_optional || false,\n    group_name: ing.group_name || null,\n    sort_order: ing.sort_order || 0\n  });\n}\n\nif (recipeIngredients.length > 0) {\n  await axios.post(`${supabaseUrl}/rest/v1/recipe_ingredients`, recipeIngredients, { headers });\n}\n\nconst steps = parsedData.parsed.steps.map(s => ({\n  recipe_id: recipeId,\n  step_number: s.step_number,\n  instruction: s.instruction,\n  duration_min: s.duration_min || null\n}));\n\nif (steps.length > 0) {\n  await axios.post(`${supabaseUrl}/rest/v1/recipe_steps`, steps, { headers });\n}\n\nreturn [{\n  json: {\n    recipe_id: recipeId,\n    parsed: parsedData.parsed,\n    unmatched_ingredients: unmatchedIngredients,\n    source_url: parsedData.source_url\n  }\n}];"
+      },
+      "id": "save-ingredients-steps",
+      "name": "Match & Save Ingredients + Steps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2620, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, recipe_id: $json.recipe_id, recipe: $json.parsed, unmatched_ingredients: $json.unmatched_ingredients, source_url: $json.source_url }) }}",
+        "options": {
+          "responseCode": 201
+        }
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2840, 300]
+    }
+  ],
+  "connections": {
+    "Webhook: Receive URL": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Fetch Recipe Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error: Invalid Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Fetch Recipe Page": {
+      "main": [
+        [
+          {
+            "node": "Clean HTML → Extract Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error: URL Fetch Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean HTML → Extract Text": {
+      "main": [
+        [
+          {
+            "node": "Is Content Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Content Valid?": {
+      "main": [
+        [
+          {
+            "node": "Supabase: Fetch Household Ingredients",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error: Content Extraction Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Fetch Household Ingredients": {
+      "main": [
+        [
+          {
+            "node": "Build Ingredient Reference List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Ingredient Reference List": {
+      "main": [
+        [
+          {
+            "node": "Claude API: Parse Recipe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude API: Parse Recipe": {
+      "main": [
+        [
+          {
+            "node": "Validate Claude Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Claude Response": {
+      "main": [
+        [
+          {
+            "node": "Is Parse Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Parse Valid?": {
+      "main": [
+        [
+          {
+            "node": "Supabase: Save Recipe (Draft)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Error: Parse Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase: Save Recipe (Draft)": {
+      "main": [
+        [
+          {
+            "node": "Match & Save Ingredients + Steps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match & Save Ingredients + Steps": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "Plateful"
+    }
+  ]
+}
