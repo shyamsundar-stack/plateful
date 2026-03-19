@@ -8,6 +8,29 @@ const pwaConfig = withPWA({
   fallbacks: {
     document: "/offline", // Show offline page when no network
   },
+  runtimeCaching: [
+    {
+      // Never cache HTML pages — middleware auth must always run
+      urlPattern: ({ request }) => request.mode === "navigate",
+      handler: "NetworkFirst",
+      options: {
+        cacheName: "pages",
+        networkTimeoutSeconds: 5,
+      },
+    },
+    {
+      // Cache static assets normally
+      urlPattern: ({ request }) =>
+        request.destination === "style" ||
+        request.destination === "script" ||
+        request.destination === "image" ||
+        request.destination === "font",
+      handler: "StaleWhileRevalidate",
+      options: {
+        cacheName: "static-assets",
+      },
+    },
+  ],
 });
 
 /** @type {import('next').NextConfig} */
